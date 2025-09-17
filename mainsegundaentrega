@@ -1,18 +1,24 @@
+package src;
+
+import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.File;
+import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.*;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.Locale;
+import java.util.stream.Collectors;
 
 /**
- * Clase main (Entrega 2).
- * - Lee products.csv, salesmen.csv y sales_*.txt de la carpeta input.
- * - Calcula ventas por vendedor y por producto.
- * - Genera reportes preliminares en carpeta output.
- *
- * NOTA: Esta es la versión de la Entrega 2, con puntos pendientes marcados como TO-DO para entrega3.
+ * Clase main para la segunda entrega.
+ * Lee los archivos generados por GenerateInfoFiles y crea los reportes pedidos.
  */
 public class main {
 
@@ -23,131 +29,164 @@ public class main {
         try {
             ensureOutputDir();
 
-            // 1) Leer productos
-            Map<String, Product> products = loadProducts();
+            // 1. Cargar productos
+            Map<Integer, Product> products = loadProducts();
 
-            // 2) Leer vendedores
-            Map<String, String> salesmen = loadSalesmen();
+            // 2. Cargar vendedores
+            Map<String, Salesman> salesmen = loadSalesmen();
 
-            // 3) Procesar archivos de ventas
-            File[] salesFiles = new File(INPUT_DIR).listFiles((dir, name) -> name.startsWith("sales_") && name.endsWith(".txt"));
-            if (salesFiles == null || salesFiles.length == 0) {
-                System.err.println("No se encontraron archivos de ventas en la carpeta input/");
-                return;
-            }
+            // 3. Procesar archivos de ventas
+            processSalesFiles(products, salesmen);
 
-            Map<String, Double> totalBySalesman = new HashMap<>();
-            Map<String, Integer> totalByProduct = new HashMap<>();
+            // 4. Generar reportes
+            generateVendorsReport(salesmen);
+            generateProductsReport(products);
 
-            for (File f : salesFiles) {
-                List<String> lines = Files.readAllLines(f.toPath());
-                if (lines.isEmpty()) continue;
-
-                // Cabecera: TipoDoc;NumeroDoc
-                String[] header = lines.get(0).split(";");
-                String docType = header[0];
-                String docNumber = header[1];
-                String salesmanKey = docType + ";" + docNumber;
-
-                double totalSales = 0.0;
-
-                for (int i = 1; i < lines.size(); i++) {
-                    String[] parts = lines.get(i).split(";");
-                    if (parts.length < 2) continue; // línea vacía o incorrecta
-
-                    String productId = parts[0];
-                    int qty = Integer.parseInt(parts[1]);
-
-                    Product p = products.get(productId);
-                    if (p != null) {
-                        totalSales += qty * p.price;
-                        totalByProduct.put(productId, totalByProduct.getOrDefault(productId, 0) + qty);
-                    }
-                }
-
-                totalBySalesman.put(salesmanKey, totalBySalesman.getOrDefault(salesmanKey, 0.0) + totalSales);
-            }
-
-            // 4) Generar reportes preliminares
-            generateVendorsReport(salesmen, totalBySalesman);
-            generateProductsReport(products, totalByProduct);
-
-            System.out.println("main: Reportes preliminares generados en ./output/");
+            System.out.println("main: Reportes creados en ./" + OUTPUT_DIR);
 
         } catch (Exception e) {
             System.err.println("Error en ejecución: " + e.getMessage());
             e.printStackTrace();
+            System.exit(1);
         }
     }
 
-    // ---------- MODELOS SIMPLES ----------
-    static class Product {
-        String id;
-        String name;
-        double price;
-        Product(String id, String name, double price) {
-            this.id = id; this.name = name; this.price = price;
-        }
-    }
-
-    // ---------- UTILIDADES ----------
     private static void ensureOutputDir() throws IOException {
-        Files.createDirectories(Paths.get(OUTPUT_DIR));
-    }
-
-    private static Map<String, Product> loadProducts() throws IOException {
-        Map<String, Product> products = new HashMap<>();
-        List<String> lines = Files.readAllLines(Paths.get(INPUT_DIR, "products.csv"));
-        for (String line : lines) {
-            if (line.trim().isEmpty()) continue;
-            String[] parts = line.split(";");
-            String id = parts[0];
-            String name = parts[1];
-            double price = Double.parseDouble(parts[2]);
-            products.put(id, new Product(id, name, price));
+        Path p = Paths.get(OUTPUT_DIR);
+        if (!Files.exists(p)) {
+            Files.createDirectories(p);
         }
-        return products;
     }
 
-    private static Map<String, String> loadSalesmen() throws IOException {
-        Map<String, String> salesmen = new HashMap<>();
-        List<String> lines = Files.readAllLines(Paths.get(INPUT_DIR, "salesmen.csv"));
-        for (String line : lines) {
-            if (line.trim().isEmpty()) continue;
-            String[] parts = line.split(";");
-            String key = parts[0] + ";" + parts[1]; // TipoDoc;Numero
-            String name = parts[2] + " " + parts[3];
-            salesmen.put(key, name);
+    // Cargar productos desde products.csv
+    private static Map<Integer, Product> loadProducts() throws IOException {
+        Map<Integer, Product> map = new HashMap<>();
+        Path p = Paths.get(INPUT_DIR, "products.csv");
+        try (BufferedReader br = Files.newBufferedReader(p)) {
+            String line;
+            while ((line = br.readLine()) != null) {
+                String[] parts = line.split(";");
+                if (parts.length >= 3) {
+                    int id = Integer.parseInt(parts[0]);
+                    String name = parts[1];
+                    double price = Double.parseDouble(parts[2]);
+                    map.put(id, new Product(id, name, price));
+                }
+            }
         }
-        return salesmen;
+        return map;
     }
 
-    private static void generateVendorsReport(Map<String, String> salesmen, Map<String, Double> totals) throws IOException {
+    // Cargar vendedores desde salesmen.csv
+    private static Map<String, Salesman> loadSalesmen() throws IOException {
+        Map<String, Salesman> map = new HashMap<>();
+        Path p = Paths.get(INPUT_DIR, "salesmen.csv");
+        try (BufferedReader br = Files.newBufferedReader(p)) {
+            String line;
+            while ((line = br.readLine()) != null) {
+                String[] parts = line.split(";");
+                if (parts.length >= 4) {
+                    String key = parts[0] + ";" + parts[1];
+                    String name = parts[2] + " " + parts[3];
+                    map.put(key, new Salesman(key, name));
+                }
+            }
+        }
+        return map;
+    }
+
+    // Procesar los archivos de ventas sales_*.txt
+    private static void processSalesFiles(Map<Integer, Product> products,
+                                          Map<String, Salesman> salesmen) throws IOException {
+        File dir = new File(INPUT_DIR);
+        File[] files = dir.listFiles((d, name) -> name.startsWith("sales_") && name.endsWith(".txt"));
+        if (files == null) return;
+
+        for (File f : files) {
+            try (BufferedReader br = new BufferedReader(new FileReader(f))) {
+                String header = br.readLine(); // primera línea: TipoDoc;NumeroDoc
+                if (header == null) continue;
+                Salesman sm = salesmen.get(header);
+                if (sm == null) continue;
+
+                String line;
+                while ((line = br.readLine()) != null) {
+                    String[] parts = line.split(";");
+                    if (parts.length >= 2) {
+                        int pid = Integer.parseInt(parts[0]);
+                        int qty = Integer.parseInt(parts[1]);
+                        Product prod = products.get(pid);
+                        if (prod != null) {
+                            double total = prod.price * qty;
+                            sm.totalSales += total;
+                            prod.totalSold += qty;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Generar reporte de vendedores
+    private static void generateVendorsReport(Map<String, Salesman> salesmen) throws IOException {
         File f = new File(OUTPUT_DIR, "vendors_report.csv");
+
+        Map<String, Salesman> sorted = salesmen.values().stream()
+                .sorted(Comparator.comparingDouble((Salesman s) -> s.totalSales).reversed())
+                .collect(Collectors.toMap(
+                        s -> s.key, s -> s,
+                        (a, b) -> a, LinkedHashMap::new
+                ));
+
         try (BufferedWriter bw = new BufferedWriter(new FileWriter(f))) {
-            bw.write("NombreVendedor;Documento;TotalRecaudado");
-            bw.newLine();
-            for (Map.Entry<String, Double> e : totals.entrySet()) {
-                String key = e.getKey();
-                String name = salesmen.getOrDefault(key, "(desconocido)");
-                bw.write(name + ";" + key + ";" + e.getValue());
+            for (Salesman sm : sorted.values()) {
+                bw.write(sm.name + ";" + String.format(Locale.US, "%.2f", sm.totalSales));
                 bw.newLine();
             }
         }
     }
 
-    private static void generateProductsReport(Map<String, Product> products, Map<String, Integer> totals) throws IOException {
+    // Generar reporte de productos
+    private static void generateProductsReport(Map<Integer, Product> products) throws IOException {
         File f = new File(OUTPUT_DIR, "products_report.csv");
+
+        Map<Integer, Product> sorted = products.values().stream()
+                .sorted(Comparator.comparingInt((Product p) -> p.totalSold).reversed())
+                .collect(Collectors.toMap(
+                        p -> p.id, p -> p,
+                        (a, b) -> a, LinkedHashMap::new
+                ));
+
         try (BufferedWriter bw = new BufferedWriter(new FileWriter(f))) {
-            bw.write("NombreProducto;PrecioUnidad;CantidadVendida");
-            bw.newLine();
-            for (Map.Entry<String, Integer> e : totals.entrySet()) {
-                Product p = products.get(e.getKey());
-                if (p != null) {
-                    bw.write(p.name + ";" + p.price + ";" + e.getValue());
-                    bw.newLine();
-                }
+            for (Product p : sorted.values()) {
+                bw.write(p.name + ";" + p.price + ";" + p.totalSold);
+                bw.newLine();
             }
+        }
+    }
+
+    // ----------------- Clases internas -------------------
+    private static class Product {
+        int id;
+        String name;
+        double price;
+        int totalSold = 0;
+
+        Product(int id, String name, double price) {
+            this.id = id;
+            this.name = name;
+            this.price = price;
+        }
+    }
+
+    private static class Salesman {
+        String key;
+        String name;
+        double totalSales = 0;
+
+        Salesman(String key, String name) {
+            this.key = key;
+            this.name = name;
         }
     }
 }
